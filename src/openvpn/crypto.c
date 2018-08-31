@@ -5,8 +5,8 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -1224,7 +1224,7 @@ read_key_file(struct key2 *key2, const char *file, const unsigned int flags)
 {
     struct gc_arena gc = gc_new();
     struct buffer in;
-    int fd, size;
+    int size;
     uint8_t hex_byte[3] = {0, 0, 0};
     const char *error_filename = file;
 
@@ -1268,22 +1268,11 @@ read_key_file(struct key2 *key2, const char *file, const unsigned int flags)
     }
     else /* 'file' is a filename which refers to a file containing the ascii key */
     {
-        in = alloc_buf_gc(2048, &gc);
-        fd = platform_open(file, O_RDONLY, 0);
-        if (fd == -1)
-        {
-            msg(M_ERR, "Cannot open key file '%s'", file);
-        }
-        size = read(fd, in.data, in.capacity);
-        if (size < 0)
-        {
+        in = buffer_read_from_file(file, &gc);
+        if (!buf_valid(&in))
             msg(M_FATAL, "Read error on key file ('%s')", file);
-        }
-        if (size == in.capacity)
-        {
-            msg(M_FATAL, "Key file ('%s') can be a maximum of %d bytes", file, (int)in.capacity);
-        }
-        close(fd);
+
+        size = in.len;
     }
 
     cp = (unsigned char *)in.data;
@@ -1429,36 +1418,24 @@ read_key_file(struct key2 *key2, const char *file, const unsigned int flags)
     gc_free(&gc);
 }
 
-/*
- * Write key to file, return number of random bits
- * written.
- */
 int
 write_key_file(const int nkeys, const char *filename)
 {
     struct gc_arena gc = gc_new();
 
-    int fd, i;
-    int nbits = 0;
+    int nbits = nkeys * sizeof(struct key) * 8;
 
     /* must be large enough to hold full key file */
     struct buffer out = alloc_buf_gc(2048, &gc);
-    struct buffer nbits_head_text = alloc_buf_gc(128, &gc);
 
     /* how to format the ascii file representation of key */
     const int bytes_per_line = 16;
 
-    /* open key file */
-    fd = platform_open(filename, O_CREAT | O_TRUNC | O_WRONLY, S_IRUSR | S_IWUSR);
-
-    if (fd == -1)
-    {
-        msg(M_ERR, "Cannot open shared secret file '%s' for write", filename);
-    }
-
+    /* write header */
+    buf_printf(&out, "#\n# %d bit OpenVPN static key\n#\n", nbits);
     buf_printf(&out, "%s\n", static_key_head);
 
-    for (i = 0; i < nkeys; ++i)
+    for (int i = 0; i < nkeys; ++i)
     {
         struct key key;
         char *fmt;
@@ -1474,9 +1451,6 @@ write_key_file(const int nkeys, const char *filename)
                             "\n",
                             &gc);
 
-        /* increment random bits counter */
-        nbits += sizeof(key) * 8;
-
         /* write to holding buffer */
         buf_printf(&out, "%s\n", fmt);
 
@@ -1487,16 +1461,10 @@ write_key_file(const int nkeys, const char *filename)
 
     buf_printf(&out, "%s\n", static_key_foot);
 
-    /* write number of bits */
-    buf_printf(&nbits_head_text, "#\n# %d bit OpenVPN static key\n#\n", nbits);
-    buf_write_string_file(&nbits_head_text, filename, fd);
-
     /* write key file, now formatted in out, to file */
-    buf_write_string_file(&out, filename, fd);
-
-    if (close(fd))
+    if(!buffer_write_file(filename, &out))
     {
-        msg(M_ERR, "Close error on shared secret file %s", filename);
+        nbits = -1;
     }
 
     /* zero memory which held file content (memory will be freed by GC) */
@@ -1545,11 +1513,18 @@ ascii2keydirection(int msglevel, const char *str)
 }
 
 const char *
-keydirection2ascii(int kd, bool remote)
+keydirection2ascii(int kd, bool remote, bool humanreadable)
 {
     if (kd == KEY_DIRECTION_BIDIRECTIONAL)
     {
-        return NULL;
+        if (humanreadable)
+        {
+            return "not set";
+        }
+        else
+        {
+            return NULL;
+        }
     }
     else if (kd == KEY_DIRECTION_NORMAL)
     {

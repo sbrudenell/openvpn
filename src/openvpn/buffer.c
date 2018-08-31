@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -189,6 +189,34 @@ free_buf(struct buffer *buf)
     CLEAR(*buf);
 }
 
+static void
+free_buf_gc(struct buffer *buf, struct gc_arena *gc)
+{
+    if (gc)
+    {
+        struct gc_entry **e = &gc->list;
+
+        while (*e)
+        {
+            /* check if this object is the one we want to delete */
+            if ((uint8_t *)(*e + 1) == buf->data)
+            {
+                struct gc_entry *to_delete = *e;
+
+                /* remove element from linked list and free it */
+                *e = (*e)->next;
+                free(to_delete);
+
+                break;
+            }
+
+            e = &(*e)->next;
+        }
+    }
+
+    CLEAR(*buf);
+}
+
 /*
  * Return a buffer for write that is a subset of another buffer
  */
@@ -315,16 +343,33 @@ convert_to_one_line(struct buffer *buf)
     }
 }
 
-/* NOTE: requires that string be null terminated */
-void
-buf_write_string_file(const struct buffer *buf, const char *filename, int fd)
+bool
+buffer_write_file(const char *filename, const struct buffer *buf)
 {
-    const int len = strlen((char *) BPTR(buf));
-    const int size = write(fd, BPTR(buf), len);
-    if (size != len)
+    bool ret = false;
+    int fd = platform_open(filename, O_CREAT | O_TRUNC | O_WRONLY,
+                           S_IRUSR | S_IWUSR);
+    if (fd == -1)
     {
-        msg(M_ERR, "Write error on file '%s'", filename);
+        msg(M_ERRNO, "Cannot open file '%s' for write", filename);
+        return false;
     }
+
+    const int size = write(fd, BPTR(buf), BLEN(buf));
+    if (size != BLEN(buf))
+    {
+        msg(M_ERRNO, "Write error on file '%s'", filename);
+        goto cleanup;
+    }
+
+    ret = true;
+cleanup:
+    if (close(fd) < 0)
+    {
+        msg(M_ERRNO, "Close error on file %s", filename);
+        ret = false;
+    }
+    return ret;
 }
 
 /*
@@ -1169,7 +1214,7 @@ buffer_list_reset(struct buffer_list *ol)
 }
 
 void
-buffer_list_push(struct buffer_list *ol, const unsigned char *str)
+buffer_list_push(struct buffer_list *ol, const char *str)
 {
     if (str)
     {
@@ -1183,7 +1228,7 @@ buffer_list_push(struct buffer_list *ol, const unsigned char *str)
 }
 
 struct buffer_entry *
-buffer_list_push_data(struct buffer_list *ol, const uint8_t *data, size_t size)
+buffer_list_push_data(struct buffer_list *ol, const void *data, size_t size)
 {
     struct buffer_entry *e = NULL;
     if (data && (!ol->max_size || ol->size < ol->max_size))
@@ -1223,7 +1268,8 @@ buffer_list_peek(struct buffer_list *ol)
 }
 
 void
-buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max, const char *sep)
+buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max_len,
+                                const char *sep)
 {
     int sep_len = strlen(sep);
 
@@ -1232,9 +1278,15 @@ buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max, const 
         struct buffer_entry *more = bl->head;
         size_t size = 0;
         int count = 0;
-        for (count = 0; more && size <= max; ++count)
+        for (count = 0; more; ++count)
         {
-            size += BLEN(&more->buf) + sep_len;
+            size_t extra_len = BLEN(&more->buf) + sep_len;
+            if (size + extra_len > max_len)
+            {
+                break;
+            }
+
+            size += extra_len;
             more = more->next;
         }
 
@@ -1244,8 +1296,7 @@ buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max, const 
             struct buffer_entry *e = bl->head, *f;
 
             ALLOC_OBJ_CLEAR(f, struct buffer_entry);
-            f->buf.data = malloc(size);
-            check_malloc_return(f->buf.data);
+            f->buf = alloc_buf(size + 1); /* prevent 0-byte malloc */
             f->buf.capacity = size;
             for (i = 0; e && i < count; ++i)
             {
@@ -1257,6 +1308,7 @@ buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max, const 
                 e = next;
             }
             bl->head = f;
+            bl->size -= count - 1;
             f->next = more;
             if (!more)
             {
@@ -1317,11 +1369,44 @@ buffer_list_file(const char *fn, int max_line_len)
             bl = buffer_list_new(0);
             while (fgets(line, max_line_len, fp) != NULL)
             {
-                buffer_list_push(bl, (unsigned char *)line);
+                buffer_list_push(bl, line);
             }
             free(line);
         }
         fclose(fp);
     }
     return bl;
+}
+
+struct buffer
+buffer_read_from_file(const char *filename, struct gc_arena *gc)
+{
+    struct buffer ret = { 0 };
+
+    platform_stat_t file_stat = {0};
+    if (platform_stat(filename, &file_stat) < 0)
+    {
+        return ret;
+    }
+
+    FILE *fp = platform_fopen(filename, "r");
+    if (!fp)
+    {
+        return ret;
+    }
+
+    const size_t size = file_stat.st_size;
+    ret = alloc_buf_gc(size + 1, gc); /* space for trailing \0 */
+    ssize_t read_size = fread(BPTR(&ret), 1, size, fp);
+    if (read_size < 0)
+    {
+        free_buf_gc(&ret, gc);
+        goto cleanup;
+    }
+    ASSERT(buf_inc_len(&ret, read_size));
+    buf_null_terminate(&ret);
+
+cleanup:
+    fclose(fp);
+    return ret;
 }

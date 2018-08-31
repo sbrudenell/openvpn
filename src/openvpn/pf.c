@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -621,8 +621,8 @@ pf_init_context(struct context *c)
 #ifdef PLUGIN_PF
     if (plugin_defined(c->plugins, OPENVPN_PLUGIN_ENABLE_PF))
     {
-        c->c2.pf.filename = create_temp_file(c->options.tmp_dir, "pf",
-                                             &c->c2.gc);
+        c->c2.pf.filename = platform_create_temp_file(c->options.tmp_dir, "pf",
+                                                      &c->c2.gc);
         if (c->c2.pf.filename)
         {
             setenv_str(c->c2.es, "pf_file", c->c2.pf.filename);

@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2012-2017 Heiko Hund <heiko.hund@sophos.com>
+ *  Copyright (C) 2012-2018 Heiko Hund <heiko.hund@sophos.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -453,7 +453,6 @@ static BOOL
 GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
 {
     size_t size, len;
-    BOOL ret = FALSE;
     WCHAR *data = NULL;
     DWORD bytes, read;
 
@@ -462,7 +461,7 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_SYSERR, TEXT("PeekNamedPipeAsync failed"));
         ReturnLastError(pipe, L"PeekNamedPipeAsync");
-        goto out;
+        goto err;
     }
 
     size = bytes / sizeof(*data);
@@ -470,7 +469,7 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_SYSERR, TEXT("malformed startup data: 1 byte received"));
         ReturnError(pipe, ERROR_STARTUP_DATA, L"GetStartupData", 1, &exit_event);
-        goto out;
+        goto err;
     }
 
     data = malloc(bytes);
@@ -478,7 +477,7 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_SYSERR, TEXT("malloc failed"));
         ReturnLastError(pipe, L"malloc");
-        goto out;
+        goto err;
     }
 
     read = ReadPipeAsync(pipe, data, bytes, 1, &exit_event);
@@ -486,14 +485,14 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_SYSERR, TEXT("ReadPipeAsync failed"));
         ReturnLastError(pipe, L"ReadPipeAsync");
-        goto out;
+        goto err;
     }
 
     if (data[size - 1] != 0)
     {
         MsgToEventLog(M_ERR, TEXT("Startup data is not NULL terminated"));
         ReturnError(pipe, ERROR_STARTUP_DATA, L"GetStartupData", 1, &exit_event);
-        goto out;
+        goto err;
     }
 
     sud->directory = data;
@@ -503,7 +502,7 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_ERR, TEXT("Startup data ends at working directory"));
         ReturnError(pipe, ERROR_STARTUP_DATA, L"GetStartupData", 1, &exit_event);
-        goto out;
+        goto err;
     }
 
     sud->options = sud->directory + len;
@@ -513,16 +512,16 @@ GetStartupData(HANDLE pipe, STARTUP_DATA *sud)
     {
         MsgToEventLog(M_ERR, TEXT("Startup data ends at command line options"));
         ReturnError(pipe, ERROR_STARTUP_DATA, L"GetStartupData", 1, &exit_event);
-        goto out;
+        goto err;
     }
 
     sud->std_input = sud->options + len;
-    data = NULL; /* don't free data */
-    ret = TRUE;
+    return TRUE;
 
-out:
+err:
+    sud->directory = NULL;		/* caller must not free() */
     free(data);
-    return ret;
+    return FALSE;
 }
 
 
@@ -804,17 +803,18 @@ HandleBlockDNSMessage(const block_dns_message_t *msg, undo_lists_t *lists)
             }
             interface_data->engine = engine;
             interface_data->index = msg->iface.index;
+            int is_auto = 0;
             interface_data->metric_v4 = get_interface_metric(msg->iface.index,
-                                                             AF_INET);
-            if (interface_data->metric_v4 < 0)
+                                                             AF_INET, &is_auto);
+            if (is_auto)
             {
-                interface_data->metric_v4 = -1;
+                interface_data->metric_v4 = 0;
             }
             interface_data->metric_v6 = get_interface_metric(msg->iface.index,
-                                                             AF_INET6);
-            if (interface_data->metric_v6 < 0)
+                                                             AF_INET6, &is_auto);
+            if (is_auto)
             {
-                interface_data->metric_v6 = -1;
+                interface_data->metric_v6 = 0;
             }
             err = AddListItem(&(*lists)[block_dns], interface_data);
             if (!err)

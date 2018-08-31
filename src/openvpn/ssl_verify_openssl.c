@@ -5,8 +5,8 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -44,8 +44,9 @@
 #include "ssl_verify_backend.h"
 #include "openssl_compat.h"
 
-#include <openssl/x509v3.h>
+#include <openssl/bn.h>
 #include <openssl/err.h>
+#include <openssl/x509v3.h>
 
 int
 verify_callback(int preverify_ok, X509_STORE_CTX *ctx)
@@ -767,7 +768,7 @@ x509_write_pem(FILE *peercert_file, X509 *peercert)
 {
     if (PEM_write_X509(peercert_file, peercert) < 0)
     {
-        msg(M_ERR, "Failed to write peer certificate in PEM format");
+        msg(M_NONFATAL, "Failed to write peer certificate in PEM format");
         return FAILURE;
     }
     return SUCCESS;

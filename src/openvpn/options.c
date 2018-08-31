@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *  Copyright (C) 2008-2013 David Sommerseth <dazo@users.sourceforge.net>
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -41,6 +41,7 @@
 #include "buffer.h"
 #include "error.h"
 #include "common.h"
+#include "run_command.h"
 #include "shaper.h"
 #include "crypto.h"
 #include "ssl.h"
@@ -703,8 +704,7 @@ static const char usage_message[] =
     "                    which allow multiple addresses,\n"
     "                    --dhcp-option must be repeated.\n"
     "                    DOMAIN name : Set DNS suffix\n"
-    "                    DNS addr    : Set domain name server address(es) (IPv4)\n"
-    "                    DNS6 addr   : Set domain name server address(es) (IPv6)\n"
+    "                    DNS addr    : Set domain name server address(es) (IPv4 and IPv6)\n"
     "                    NTP         : Set NTP server address(es)\n"
     "                    NBDD        : Set NBDD server address(es)\n"
     "                    WINS addr   : Set WINS server address(es)\n"
@@ -1226,6 +1226,20 @@ show_tuntap_options(const struct tuntap_options *o)
 
 #if defined(_WIN32) || defined(TARGET_ANDROID)
 static void
+dhcp_option_dns6_parse(const char *parm, struct in6_addr *dns6_list, int *len, int msglevel)
+{
+    struct in6_addr addr;
+    if (*len >= N_DHCP_ADDR)
+    {
+        msg(msglevel, "--dhcp-option DNS: maximum of %d IPv6 dns servers can be specified",
+            N_DHCP_ADDR);
+    }
+    else if (get_ipv6_addr(parm, &addr, NULL, msglevel))
+    {
+        dns6_list[(*len)++] = addr;
+    }
+}
+static void
 dhcp_option_address_parse(const char *name, const char *parm, in_addr_t *array, int *len, int msglevel)
 {
     if (*len >= N_DHCP_ADDR)
@@ -1493,6 +1507,11 @@ show_connection_entry(const struct connection_entry *o)
 #ifdef ENABLE_OCC
     SHOW_INT(explicit_exit_notification);
 #endif
+
+    SHOW_STR(tls_auth_file);
+    SHOW_PARM(key_direction, keydirection2ascii(o->key_direction, false, true),
+              "%s");
+    SHOW_STR(tls_crypt_file);
 }
 
 
@@ -1691,7 +1710,7 @@ show_settings(const struct options *o)
 #endif
 
     SHOW_STR(shared_secret_file);
-    SHOW_INT(key_direction);
+    SHOW_PARM(key_direction, keydirection2ascii(o->key_direction, false, true), "%s");
     SHOW_STR(ciphername);
     SHOW_BOOL(ncp_enabled);
     SHOW_STR(ncp_ciphers);
@@ -1772,9 +1791,6 @@ show_settings(const struct options *o)
     SHOW_BOOL(single_session);
     SHOW_BOOL(push_peer_info);
     SHOW_BOOL(tls_exit);
-
-    SHOW_STR(tls_auth_file);
-    SHOW_STR(tls_crypt_file);
 
 #ifdef ENABLE_PKCS11
     {
@@ -2157,6 +2173,15 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
     {
         msg(M_USAGE, "--management-client-(user|group) can only be used on unix domain sockets");
     }
+
+    if (options->management_addr
+        && !(options->management_flags & MF_UNIX_SOCK)
+        && (!options->management_user_pass))
+    {
+        msg(M_WARN, "WARNING: Using --management on a TCP port WITHOUT "
+            "passwords is STRONGLY discouraged and considered insecure");
+    }
+
 #endif
 
     /*
@@ -2509,6 +2534,18 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
             "in the configuration file, which is the recommended approach.");
     }
 
+    const int tls_version_max =
+        (options->ssl_flags >> SSLF_TLS_VERSION_MAX_SHIFT)
+        & SSLF_TLS_VERSION_MAX_MASK;
+    const int tls_version_min =
+        (options->ssl_flags >> SSLF_TLS_VERSION_MIN_SHIFT)
+        & SSLF_TLS_VERSION_MIN_MASK;
+
+    if (tls_version_max > 0 && tls_version_max < tls_version_min)
+    {
+        msg(M_USAGE, "--tls-version-min bigger than --tls-version-max");
+    }
+
     if (options->tls_server || options->tls_client)
     {
 #ifdef ENABLE_PKCS11
@@ -2689,7 +2726,7 @@ options_postprocess_verify_ce(const struct options *options, const struct connec
                 notnull(options->priv_key_file, "private key file (--key) or PKCS#12 file (--pkcs12)");
             }
         }
-        if (options->tls_auth_file && options->tls_crypt_file)
+        if (ce->tls_auth_file && ce->tls_crypt_file)
         {
             msg(M_USAGE, "--tls-auth and --tls-crypt are mutually exclusive");
         }
@@ -2835,6 +2872,49 @@ options_postprocess_mutate_ce(struct options *o, struct connection_entry *ce)
         }
     }
 
+    /*
+     * Set per-connection block tls-auth/crypt fields if undefined.
+     *
+     * At the end only one of the two will be really set because the parser
+     * logic prevents configurations where both are set.
+     */
+    if (!ce->tls_auth_file && !ce->tls_crypt_file)
+    {
+        ce->tls_auth_file = o->tls_auth_file;
+        ce->tls_auth_file_inline = o->tls_auth_file_inline;
+        ce->key_direction = o->key_direction;
+
+        ce->tls_crypt_file = o->tls_crypt_file;
+        ce->tls_crypt_inline = o->tls_crypt_inline;
+    }
+
+    /* pre-cache tls-auth/crypt key file if persist-key was specified and keys
+     * were not already embedded in the config file
+     */
+    if (o->persist_key)
+    {
+        if (ce->tls_auth_file && !ce->tls_auth_file_inline)
+        {
+            struct buffer in = buffer_read_from_file(o->tls_auth_file, &o->gc);
+            if (!buf_valid(&in))
+                msg(M_FATAL, "Cannot pre-load tls-auth keyfile (%s)",
+                    o->tls_auth_file);
+
+            ce->tls_auth_file = INLINE_FILE_TAG;
+            ce->tls_auth_file_inline = (char *)in.data;
+        }
+
+        if (ce->tls_crypt_file && !ce->tls_crypt_inline)
+        {
+            struct buffer in = buffer_read_from_file(o->tls_crypt_file, &o->gc);
+            if (!buf_valid(&in))
+                msg(M_FATAL, "Cannot pre-load tls-crypt keyfile (%s)",
+                    o->tls_auth_file);
+
+            ce->tls_crypt_file = INLINE_FILE_TAG;
+            ce->tls_crypt_inline = (char *)in.data;
+        }
+    }
 }
 
 #ifdef _WIN32
@@ -3017,24 +3097,6 @@ options_postprocess_mutate(struct options *o)
         options_postprocess_http_proxy_override(o);
     }
 #endif
-
-#ifdef ENABLE_CRYPTOAPI
-    if (o->cryptoapi_cert)
-    {
-        const int tls_version_max =
-            (o->ssl_flags >> SSLF_TLS_VERSION_MAX_SHIFT)
-            &SSLF_TLS_VERSION_MAX_MASK;
-
-        if (tls_version_max == TLS_VER_UNSPEC || tls_version_max > TLS_VER_1_1)
-        {
-            msg(M_WARN, "Warning: cryptapicert used, setting maximum TLS "
-                "version to 1.1.");
-            o->ssl_flags &= ~(SSLF_TLS_VERSION_MAX_MASK
-                              <<SSLF_TLS_VERSION_MAX_SHIFT);
-            o->ssl_flags |= (TLS_VER_1_1 << SSLF_TLS_VERSION_MAX_SHIFT);
-        }
-    }
-#endif /* ENABLE_CRYPTOAPI */
 
 #if P2MP
     /*
@@ -3269,12 +3331,22 @@ options_postprocess_filechecks(struct options *options)
                                          options->crl_file, R_OK, "--crl-verify");
     }
 
-    errs |= check_file_access(CHKACC_FILE|CHKACC_INLINE|CHKACC_PRIVATE,
-                              options->tls_auth_file, R_OK, "--tls-auth");
-    errs |= check_file_access(CHKACC_FILE|CHKACC_INLINE|CHKACC_PRIVATE,
-                              options->tls_crypt_file, R_OK, "--tls-crypt");
+    ASSERT(options->connection_list);
+    for (int i = 0; i < options->connection_list->len; ++i)
+    {
+        struct connection_entry *ce = options->connection_list->array[i];
+
+        errs |= check_file_access(CHKACC_FILE|CHKACC_INLINE|CHKACC_PRIVATE,
+                                  ce->tls_auth_file, R_OK, "--tls-auth");
+
+        errs |= check_file_access(CHKACC_FILE|CHKACC_INLINE|CHKACC_PRIVATE,
+                                  ce->tls_crypt_file, R_OK, "--tls-crypt");
+
+    }
+
     errs |= check_file_access(CHKACC_FILE|CHKACC_INLINE|CHKACC_PRIVATE,
                               options->shared_secret_file, R_OK, "--secret");
+
     errs |= check_file_access(CHKACC_DIRPATH|CHKACC_FILEXSTWR,
                               options->packet_id_file, R_OK|W_OK, "--replay-persist");
 
@@ -3582,7 +3654,7 @@ options_string(const struct options *o,
      * Key direction
      */
     {
-        const char *kd = keydirection2ascii(o->key_direction, remote);
+        const char *kd = keydirection2ascii(o->key_direction, remote, false);
         if (kd)
         {
             buf_printf(&out, ",keydir %s", kd);
@@ -3631,7 +3703,7 @@ options_string(const struct options *o,
     {
         if (TLS_CLIENT || TLS_SERVER)
         {
-            if (o->tls_auth_file)
+            if (o->ce.tls_auth_file)
             {
                 buf_printf(&out, ",tls-auth");
             }
@@ -4108,7 +4180,7 @@ usage_version(void)
     show_windows_version( M_INFO|M_NOPREFIX );
 #endif
     msg(M_INFO|M_NOPREFIX, "Originally developed by James Yonan");
-    msg(M_INFO|M_NOPREFIX, "Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>");
+    msg(M_INFO|M_NOPREFIX, "Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>");
 #ifndef ENABLE_SMALL
 #ifdef CONFIGURE_DEFINES
     msg(M_INFO|M_NOPREFIX, "Compile time defines: %s", CONFIGURE_DEFINES);
@@ -4523,7 +4595,7 @@ read_config_file(struct options *options,
                 ++line_num;
                 if (strlen(line) == OPTION_LINE_SIZE)
                 {
-                    msg(msglevel, "In %s:%d: Maximum optione line length (%d) exceeded, line starts with %s",
+                    msg(msglevel, "In %s:%d: Maximum option line length (%d) exceeded, line starts with %s",
                         file, line_num, OPTION_LINE_SIZE, line);
                 }
 
@@ -6363,7 +6435,7 @@ add_option(struct options *options,
     else if (streq(p[0], "script-security") && p[1] && !p[2])
     {
         VERIFY_PERMISSION(OPT_P_GENERAL);
-        script_security = atoi(p[1]);
+        script_security_set(atoi(p[1]));
     }
     else if (streq(p[0], "mssfix") && !p[2])
     {
@@ -7077,6 +7149,7 @@ add_option(struct options *options,
     {
         struct tuntap_options *o = &options->tuntap_options;
         VERIFY_PERMISSION(OPT_P_IPWIN32);
+        bool ipv6dns = false;
 
         if (streq(p[1], "DOMAIN") && p[2])
         {
@@ -7097,22 +7170,17 @@ add_option(struct options *options,
             }
             o->netbios_node_type = t;
         }
-        else if (streq(p[1], "DNS") && p[2])
+        else if ((streq(p[1], "DNS") || streq(p[1], "DNS6")) && p[2] && (!strstr(p[2], ":") || ipv6_addr_safe(p[2])))
         {
-            dhcp_option_address_parse("DNS", p[2], o->dns, &o->dns_len, msglevel);
-        }
-        else if (streq(p[1], "DNS6") && p[2] && ipv6_addr_safe(p[2]))
-        {
-            struct in6_addr addr;
-            foreign_option(options, p, 3, es);
-            if (o->dns6_len >= N_DHCP_ADDR)
+            if (strstr(p[2], ":"))
             {
-                msg(msglevel, "--dhcp-option DNS6: maximum of %d dns servers can be specified",
-                    N_DHCP_ADDR);
+                ipv6dns=true;
+                foreign_option(options, p, 3, es);
+                dhcp_option_dns6_parse(p[2], o->dns6, &o->dns6_len, msglevel);
             }
-            else if (get_ipv6_addr(p[2], &addr, NULL, msglevel))
+            else
             {
-                o->dns6[o->dns6_len++] = addr;
+                dhcp_option_address_parse("DNS", p[2], o->dns, &o->dns_len, msglevel);
             }
         }
         else if (streq(p[1], "WINS") && p[2])
@@ -7140,7 +7208,7 @@ add_option(struct options *options,
         /* flag that we have options to give to the TAP driver's DHCPv4 server
          *  - skipped for "DNS6", as that's not a DHCPv4 option
          */
-        if (!streq(p[1], "DNS6"))
+        if (!ipv6dns)
         {
             o->dhcp_options = true;
         }
@@ -7408,10 +7476,19 @@ add_option(struct options *options,
     {
         int key_direction;
 
+        VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_CONNECTION);
+
         key_direction = ascii2keydirection(msglevel, p[1]);
         if (key_direction >= 0)
         {
-            options->key_direction = key_direction;
+            if (permission_mask & OPT_P_GENERAL)
+            {
+                options->key_direction = key_direction;
+            }
+            else if (permission_mask & OPT_P_CONNECTION)
+            {
+                options->ce.key_direction = key_direction;
+            }
         }
         else
         {
@@ -7980,35 +8057,66 @@ add_option(struct options *options,
     }
     else if (streq(p[0], "tls-auth") && p[1] && !p[3])
     {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-        if (streq(p[1], INLINE_FILE_TAG) && p[2])
-        {
-            options->tls_auth_file_inline = p[2];
-        }
-        else if (p[2])
-        {
-            int key_direction;
+        int key_direction = -1;
 
-            key_direction = ascii2keydirection(msglevel, p[2]);
-            if (key_direction >= 0)
+        VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_CONNECTION);
+
+        if (permission_mask & OPT_P_GENERAL)
+        {
+            if (streq(p[1], INLINE_FILE_TAG) && p[2])
             {
+                options->tls_auth_file_inline = p[2];
+            }
+            else if (p[2])
+            {
+                key_direction = ascii2keydirection(msglevel, p[2]);
+                if (key_direction < 0)
+                {
+                    goto err;
+                }
                 options->key_direction = key_direction;
             }
-            else
-            {
-                goto err;
-            }
+            options->tls_auth_file = p[1];
         }
-        options->tls_auth_file = p[1];
+        else if (permission_mask & OPT_P_CONNECTION)
+        {
+            options->ce.key_direction = KEY_DIRECTION_BIDIRECTIONAL;
+            if (streq(p[1], INLINE_FILE_TAG) && p[2])
+            {
+                options->ce.tls_auth_file_inline = p[2];
+            }
+            else if (p[2])
+            {
+                key_direction = ascii2keydirection(msglevel, p[2]);
+                if (key_direction < 0)
+                {
+                    goto err;
+                }
+                options->ce.key_direction = key_direction;
+            }
+            options->ce.tls_auth_file = p[1];
+        }
     }
     else if (streq(p[0], "tls-crypt") && p[1] && !p[3])
     {
-        VERIFY_PERMISSION(OPT_P_GENERAL);
-        if (streq(p[1], INLINE_FILE_TAG) && p[2])
+        VERIFY_PERMISSION(OPT_P_GENERAL|OPT_P_CONNECTION);
+        if (permission_mask & OPT_P_GENERAL)
         {
-            options->tls_crypt_inline = p[2];
+            if (streq(p[1], INLINE_FILE_TAG) && p[2])
+            {
+                options->tls_crypt_inline = p[2];
+            }
+            options->tls_crypt_file = p[1];
         }
-        options->tls_crypt_file = p[1];
+        else if (permission_mask & OPT_P_CONNECTION)
+        {
+            if (streq(p[1], INLINE_FILE_TAG) && p[2])
+            {
+                options->ce.tls_crypt_inline = p[2];
+            }
+            options->ce.tls_crypt_file = p[1];
+
+        }
     }
     else if (streq(p[0], "key-method") && p[1] && !p[2])
     {

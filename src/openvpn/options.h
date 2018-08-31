@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -130,6 +130,15 @@ struct connection_entry
 #define CE_MAN_QUERY_REMOTE_MASK   (0x07)
 #define CE_MAN_QUERY_REMOTE_SHIFT  (2)
     unsigned int flags;
+
+    /* Shared secret used for TLS control channel authentication */
+    const char *tls_auth_file;
+    const char *tls_auth_file_inline;
+    int key_direction;
+
+    /* Shared secret used for TLS control channel authenticated encryption */
+    const char *tls_crypt_file;
+    const char *tls_crypt_inline;
 };
 
 struct remote_entry
@@ -425,6 +434,7 @@ struct options
     bool push_ifconfig_constraint_defined;
     in_addr_t push_ifconfig_constraint_network;
     in_addr_t push_ifconfig_constraint_netmask;
+    bool push_ifconfig_ipv4_blocked;                    /* IPv4 */
     bool push_ifconfig_ipv6_defined;                    /* IPv6 */
     struct in6_addr push_ifconfig_ipv6_local;           /* IPv6 */
     int push_ifconfig_ipv6_netbits;                     /* IPv6 */

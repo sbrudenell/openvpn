@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -123,7 +123,7 @@ bool reliable_ack_read(struct reliable_ack *ack,
  * @param ack The acknowledgment structure containing received
  *     acknowledgments.
  */
-void reliable_send_purge(struct reliable *rel, struct reliable_ack *ack);
+void reliable_send_purge(struct reliable *rel, const struct reliable_ack *ack);
 
 /** @} name Functions for processing incoming acknowledgments */
 

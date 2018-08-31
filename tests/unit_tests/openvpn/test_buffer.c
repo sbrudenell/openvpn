@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2016-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2016-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -33,6 +33,7 @@
 #include <cmocka.h>
 
 #include "buffer.h"
+#include "buffer.c"
 
 static void
 test_buffer_strprefix(void **state)
@@ -77,10 +78,9 @@ static int test_buffer_list_setup(void **state)
     buffer_list_push(ctx->zero_length_strings, "");
 
     ctx->empty_buffers = buffer_list_new(2);
-    uint8_t *data1 = malloc(1);
-    uint8_t *data2 = malloc(1);
-    buffer_list_push_data(ctx->empty_buffers, data1, 0);
-    buffer_list_push_data(ctx->empty_buffers, data2, 0);
+    uint8_t data = 0;
+    buffer_list_push_data(ctx->empty_buffers, &data, 0);
+    buffer_list_push_data(ctx->empty_buffers, &data, 0);
 
     *state = ctx;
     return 0;
@@ -135,14 +135,16 @@ static void
 test_buffer_list_aggregate_separator_two(void **state)
 {
     struct test_buffer_list_aggregate_ctx *ctx = *state;
+    const char *expected = teststr1 testsep teststr2 testsep;
 
-    /* Aggregate the first two elements */
-    /* FIXME this exceeds the supplied max */
-    buffer_list_aggregate_separator(ctx->one_two_three, 4, testsep);
-    /* FIXME size does not get adjusted after aggregating */
-    assert_int_equal(ctx->one_two_three->size, 3);
+    /* Aggregate the first two elements
+     * (add 1 to max_len to test if "three" is not sneaked in too)
+     */
+    buffer_list_aggregate_separator(ctx->one_two_three, strlen(expected) + 1,
+                                    testsep);
+    assert_int_equal(ctx->one_two_three->size, 2);
     struct buffer *buf = buffer_list_peek(ctx->one_two_three);
-    assert_buf_equals_str(buf, teststr1 testsep teststr2 testsep);
+    assert_buf_equals_str(buf, expected);
 }
 
 static void
@@ -152,8 +154,7 @@ test_buffer_list_aggregate_separator_all(void **state)
 
     /* Aggregate all */
     buffer_list_aggregate_separator(ctx->one_two_three, 1<<16, testsep);
-    /* FIXME size does not get adjusted after aggregating */
-    assert_int_equal(ctx->one_two_three->size, 3);
+    assert_int_equal(ctx->one_two_three->size, 1);
     struct buffer *buf = buffer_list_peek(ctx->one_two_three);
     assert_buf_equals_str(buf,
                           teststr1 testsep teststr2 testsep teststr3 testsep);
@@ -166,8 +167,7 @@ test_buffer_list_aggregate_separator_nosep(void **state)
 
     /* Aggregate all */
     buffer_list_aggregate_separator(ctx->one_two_three, 1<<16, testnosep);
-    /* FIXME size does not get adjusted after aggregating */
-    assert_int_equal(ctx->one_two_three->size, 3);
+    assert_int_equal(ctx->one_two_three->size, 1);
     struct buffer *buf = buffer_list_peek(ctx->one_two_three);
     assert_buf_equals_str(buf, teststr1 teststr2 teststr3);
 }
@@ -180,8 +180,7 @@ test_buffer_list_aggregate_separator_zerolen(void **state)
 
     /* Aggregate all */
     buffer_list_aggregate_separator(bl_zerolen, 1<<16, testnosep);
-    /* FIXME size does not get adjusted after aggregating */
-    assert_int_equal(bl_zerolen->size, 2);
+    assert_int_equal(bl_zerolen->size, 1);
     struct buffer *buf = buffer_list_peek(bl_zerolen);
     assert_buf_equals_str(buf, "");
 }
@@ -194,10 +193,51 @@ test_buffer_list_aggregate_separator_emptybuffers(void **state)
 
     /* Aggregate all */
     buffer_list_aggregate_separator(bl_emptybuffers, 1<<16, testnosep);
-    /* FIXME size does not get adjusted after aggregating */
-    assert_int_equal(bl_emptybuffers->size, 2);
+    assert_int_equal(bl_emptybuffers->size, 1);
     struct buffer *buf = buffer_list_peek(bl_emptybuffers);
     assert_int_equal(BLEN(buf), 0);
+}
+
+static void
+test_buffer_free_gc_one(void **state)
+{
+    struct gc_arena gc = gc_new();
+    struct buffer buf = alloc_buf_gc(1024, &gc);
+
+    assert_ptr_equal(gc.list + 1, buf.data);
+    free_buf_gc(&buf, &gc);
+    assert_null(gc.list);
+
+    gc_free(&gc);
+}
+
+static void
+test_buffer_free_gc_two(void **state)
+{
+    struct gc_arena gc = gc_new();
+    struct buffer buf1 = alloc_buf_gc(1024, &gc);
+    struct buffer buf2 = alloc_buf_gc(1024, &gc);
+    struct buffer buf3 = alloc_buf_gc(1024, &gc);
+
+    struct gc_entry *e;
+
+    e = gc.list;
+
+    assert_ptr_equal(e + 1, buf3.data);
+    assert_ptr_equal(e->next + 1, buf2.data);
+    assert_ptr_equal(e->next->next + 1, buf1.data);
+
+    free_buf_gc(&buf2, &gc);
+
+    assert_non_null(gc.list);
+
+    while (e)
+    {
+        assert_ptr_not_equal(e + 1, buf2.data);
+        e = e->next;
+    }
+
+    gc_free(&gc);
 }
 
 int
@@ -229,6 +269,8 @@ main(void)
         cmocka_unit_test_setup_teardown(test_buffer_list_aggregate_separator_emptybuffers,
                                         test_buffer_list_setup,
                                         test_buffer_list_teardown),
+        cmocka_unit_test(test_buffer_free_gc_one),
+        cmocka_unit_test(test_buffer_free_gc_two),
     };
 
     return cmocka_run_group_tests_name("buffer", tests, NULL, NULL);

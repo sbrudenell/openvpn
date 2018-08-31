@@ -5,8 +5,8 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *  Copyright (C) 2008-2013 David Sommerseth <dazo@users.sourceforge.net>
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -528,6 +528,10 @@ tls_version_parse(const char *vstr, const char *extra)
     {
         return TLS_VER_1_2;
     }
+    else if (!strcmp(vstr, "1.3") && TLS_VER_1_3 <= max_version)
+    {
+        return TLS_VER_1_3;
+    }
     else if (extra && !strcmp(extra, "or-highest"))
     {
         return max_version;
@@ -622,7 +626,10 @@ init_ssl(const struct options *options, struct tls_root_ctx *new_ctx)
      * cipher restrictions before loading certificates */
     tls_ctx_restrict_ciphers(new_ctx, options->cipher_list);
 
-    tls_ctx_set_options(new_ctx, options->ssl_flags);
+    if (!tls_ctx_set_options(new_ctx, options->ssl_flags))
+    {
+        goto err;
+    }
 
     if (options->pkcs12_file)
     {
@@ -2935,6 +2942,9 @@ tls_process(struct tls_multi *multi,
             {
                 state_change = true;
                 dmsg(D_TLS_DEBUG, "TLS -> Incoming Plaintext");
+
+                /* More data may be available, wake up again asap to check. */
+                *wakeup = 0;
             }
         }
 
@@ -3354,7 +3364,7 @@ tls_pre_decrypt(struct tls_multi *multi,
                 {
                     if (!ks->crypto_options.key_ctx_bi.initialized)
                     {
-                        msg(D_TLS_DEBUG_LOW,
+                        msg(D_MULTI_DROPPED,
                             "Key %s [%d] not initialized (yet), dropping packet.",
                             print_link_socket_actual(from, &gc), key_id);
                         goto error_lite;
@@ -3650,8 +3660,8 @@ tls_pre_decrypt(struct tls_multi *multi,
             }
 
             /*
-             * We have an authenticated packet (if --tls-auth was set).
-             * Now pass to our reliability level which deals with
+             * We have an authenticated control channel packet (if --tls-auth was set).
+             * Now pass to our reliability layer which deals with
              * packet acknowledgements, retransmits, sequencing, etc.
              */
             {

@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -34,8 +34,11 @@
 #define IFCONFIG_POOL_MAX         65536
 #define IFCONFIG_POOL_MIN_NETBITS    16
 
-#define IFCONFIG_POOL_30NET   0
-#define IFCONFIG_POOL_INDIV   1
+enum pool_type
+{
+    IFCONFIG_POOL_30NET,
+    IFCONFIG_POOL_INDIV
+};
 
 struct ifconfig_pool_entry
 {
@@ -47,13 +50,17 @@ struct ifconfig_pool_entry
 
 struct ifconfig_pool
 {
-    in_addr_t base;
-    int size;
-    int type;
     bool duplicate_cn;
-    bool ipv6;
-    struct in6_addr base_ipv6;
-    unsigned int size_ipv6;
+    struct {
+        enum pool_type type;
+        in_addr_t base;
+        int size;
+    } ipv4;
+    struct {
+        bool enabled;
+        struct in6_addr base;
+        unsigned int size;
+    } ipv6;
     struct ifconfig_pool_entry *list;
 };
 
@@ -65,7 +72,7 @@ struct ifconfig_pool_persist
 
 typedef int ifconfig_pool_handle;
 
-struct ifconfig_pool *ifconfig_pool_init(int type, in_addr_t start, in_addr_t end, const bool duplicate_cn, const bool ipv6_pool, const struct in6_addr ipv6_base, const int ipv6_netbits );
+struct ifconfig_pool *ifconfig_pool_init(enum pool_type type, in_addr_t start, in_addr_t end, const bool duplicate_cn, const bool ipv6_pool, const struct in6_addr ipv6_base, const int ipv6_netbits );
 
 void ifconfig_pool_free(struct ifconfig_pool *pool);
 

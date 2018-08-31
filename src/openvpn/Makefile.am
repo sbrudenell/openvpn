@@ -5,7 +5,7 @@
 #             packet encryption, packet authentication, and
 #             packet compression.
 #
-#  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+#  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
 #  Copyright (C) 2006-2012 Alon Bar-Lev <alon.barlev@gmail.com>
 #
 
@@ -51,6 +51,7 @@ openvpn_SOURCES = \
 	crypto_openssl.c crypto_openssl.h \
 	crypto_mbedtls.c crypto_mbedtls.h \
 	dhcp.c dhcp.h \
+	env_set.c env_set.h \
 	errlevel.h \
 	error.c error.h \
 	event.c event.h \
@@ -101,6 +102,7 @@ openvpn_SOURCES = \
 	pushlist.h \
 	reliable.c reliable.h \
 	route.c route.h \
+	run_command.c run_command.h \
 	schedule.c schedule.h \
 	session_id.c session_id.h \
 	shaper.c shaper.h \
@@ -132,5 +134,5 @@ openvpn_LDADD = \
 	$(OPTIONAL_DL_LIBS)
 if WIN32
 openvpn_SOURCES += openvpn_win32_resources.rc block_dns.c block_dns.h
-openvpn_LDADD += -lgdi32 -lws2_32 -lwininet -lcrypt32 -liphlpapi -lwinmm -lfwpuclnt -lrpcrt4
+openvpn_LDADD += -lgdi32 -lws2_32 -lwininet -lcrypt32 -liphlpapi -lwinmm -lfwpuclnt -lrpcrt4 -lncrypt
 endif

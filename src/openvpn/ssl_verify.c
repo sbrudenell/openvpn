@@ -5,8 +5,8 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -34,10 +34,10 @@
 
 #include "syshead.h"
 
-#include "misc.h"
+#include "base64.h"
 #include "manage.h"
 #include "otime.h"
-#include "base64.h"
+#include "run_command.h"
 #include "ssl_verify.h"
 #include "ssl_verify_backend.h"
 
@@ -547,9 +547,9 @@ verify_cert_export_cert(openvpn_x509_cert_t *peercert, const char *tmp_dir, stru
 
     /* create tmp file to store peer cert */
     if (!tmp_dir
-        || !(peercert_filename = create_temp_file(tmp_dir, "pcf", gc)))
+        || !(peercert_filename = platform_create_temp_file(tmp_dir, "pcf", gc)))
     {
-        msg (M_WARN, "Failed to create peer cert file");
+        msg(M_NONFATAL, "Failed to create peer cert file");
         return NULL;
     }
 
@@ -557,13 +557,16 @@ verify_cert_export_cert(openvpn_x509_cert_t *peercert, const char *tmp_dir, stru
     peercert_file = fopen(peercert_filename, "w+");
     if (!peercert_file)
     {
-        msg(M_ERR, "Failed to open temporary file : %s", peercert_filename);
+        msg(M_NONFATAL|M_ERRNO, "Failed to open temporary file: %s",
+            peercert_filename);
         return NULL;
     }
 
     if (SUCCESS != x509_write_pem(peercert_file, peercert))
     {
-        msg(M_ERR, "Error writing PEM file containing certificate");
+        msg(M_NONFATAL, "Error writing PEM file containing certificate");
+        (void) platform_unlink(peercert_filename);
+        peercert_filename = NULL;
     }
 
     fclose(peercert_file);
@@ -887,7 +890,7 @@ key_state_gen_auth_control_file(struct key_state *ks, const struct tls_options *
     struct gc_arena gc = gc_new();
 
     key_state_rm_auth_control_file(ks);
-    const char *acf = create_temp_file(opt->tmp_dir, "acf", &gc);
+    const char *acf = platform_create_temp_file(opt->tmp_dir, "acf", &gc);
     if (acf)
     {
         ks->auth_control_file = string_alloc(acf, NULL);
@@ -1100,7 +1103,8 @@ verify_user_pass_script(struct tls_session *session, const struct user_pass *up)
         {
             struct status_output *so;
 
-            tmp_file = create_temp_file(session->opt->tmp_dir, "up", &gc);
+            tmp_file = platform_create_temp_file(session->opt->tmp_dir, "up",
+                                                 &gc);
             if (tmp_file)
             {
                 so = status_open(tmp_file, 0, -1, NULL, STATUS_OUTPUT_WRITE);
@@ -1510,8 +1514,9 @@ verify_final_auth_checks(struct tls_multi *multi, struct tls_session *session)
         struct gc_arena gc = gc_new();
 
         const char *cn = session->common_name;
-        const char *path = gen_path(session->opt->client_config_dir_exclusive, cn, &gc);
-        if (!cn || !strcmp(cn, CCD_DEFAULT) || !test_file(path))
+        const char *path = platform_gen_path(session->opt->client_config_dir_exclusive,
+                                             cn, &gc);
+        if (!cn || !strcmp(cn, CCD_DEFAULT) || !platform_test_file(path))
         {
             ks->authenticated = false;
             wipe_auth_token(multi);

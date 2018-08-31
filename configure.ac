@@ -4,7 +4,7 @@ dnl             session authentication and key exchange,
 dnl             packet encryption, packet authentication, and
 dnl             packet compression.
 dnl
-dnl  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+dnl  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
 dnl  Copyright (C) 2006-2012 Alon Bar-Lev <alon.barlev@gmail.com>
 dnl
 dnl  This program is free software; you can redistribute it and/or modify
@@ -918,6 +918,7 @@ if test "${with_crypto_library}" = "openssl"; then
 			EVP_MD_CTX_new \
 			EVP_MD_CTX_free \
 			EVP_MD_CTX_reset \
+			OpenSSL_version \
 			SSL_CTX_get_default_passwd_cb \
 			SSL_CTX_get_default_passwd_cb_userdata \
 			SSL_CTX_set_security_level \
@@ -944,6 +945,7 @@ if test "${with_crypto_library}" = "openssl"; then
 			RSA_meth_set_init \
 			RSA_meth_set_finish \
 			RSA_meth_set0_app_data \
+			RSA_meth_get0_app_data \
 			EC_GROUP_order_bits
 		]
 	)
@@ -1291,13 +1293,25 @@ if test "${enable_pkcs11}" = "yes"; then
 	)
 fi
 
+AC_DEFUN([ACL_CHECK_ADD_COMPILE_FLAGS], [
+    old_cflags="$CFLAGS"
+    CFLAGS="$1 $CFLAGS"
+    AC_MSG_CHECKING([whether the compiler acceppts $1])
+    AC_COMPILE_IFELSE([AC_LANG_PROGRAM()], [AC_MSG_RESULT([yes])],
+        [AC_MSG_RESULT([no]); CFLAGS="$old_cflags"])]
+)
+
+ACL_CHECK_ADD_COMPILE_FLAGS([-Wno-unused-function])
+ACL_CHECK_ADD_COMPILE_FLAGS([-Wno-unused-parameter])
+ACL_CHECK_ADD_COMPILE_FLAGS([-Wall])
+
 if test "${enable_pedantic}" = "yes"; then
 	enable_strict="yes"
 	CFLAGS="${CFLAGS} -pedantic"
 	AC_DEFINE([PEDANTIC], [1], [Enable pedantic mode])
 fi
 if test "${enable_strict}" = "yes"; then
-	CFLAGS="${CFLAGS} -Wall -Wno-unused-parameter -Wno-unused-function"
+	CFLAGS="${CFLAGS} -Wsign-compare -Wuninitialized"
 fi
 if test "${enable_werror}" = "yes"; then
 	CFLAGS="${CFLAGS} -Werror"

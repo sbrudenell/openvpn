@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -138,7 +138,6 @@ struct tuntap
 
     bool did_ifconfig_setup;
     bool did_ifconfig_ipv6_setup;
-    bool did_ifconfig;
 
     bool persistent_if;         /* if existed before, keep on program end */
 
@@ -247,9 +246,15 @@ void init_tun_post(struct tuntap *tt,
 void do_ifconfig_setenv(const struct tuntap *tt,
                         struct env_set *es);
 
-void do_ifconfig(struct tuntap *tt,
-                 const char *actual,     /* actual device name */
-                 int tun_mtu,
+/**
+ * do_ifconfig - configure the tunnel interface
+ *
+ * @param tt        the tuntap interface context
+ * @param ifname    the human readable interface name
+ * @param mtu       the MTU value to set the interface to
+ * @param es        the environment to be used when executing the commands
+ */
+void do_ifconfig(struct tuntap *tt, const char *ifname, int tun_mtu,
                  const struct env_set *es);
 
 bool is_dev_type(const char *dev, const char *dev_type, const char *match_type);

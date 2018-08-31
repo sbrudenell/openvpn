@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -35,6 +35,7 @@
 
 #include "win32.h"
 #include "init.h"
+#include "run_command.h"
 #include "sig.h"
 #include "occ.h"
 #include "list.h"
@@ -807,7 +808,7 @@ init_static(void)
 #ifdef STATUS_PRINTF_TEST
     {
         struct gc_arena gc = gc_new();
-        const char *tmp_file = create_temp_file("/tmp", "foo", &gc);
+        const char *tmp_file = platform_create_temp_file("/tmp", "foo", &gc);
         struct status_output *so = status_open(tmp_file, 0, -1, NULL, STATUS_OUTPUT_WRITE);
         status_printf(so, "%s", "foo");
         status_printf(so, "%s", "bar");
@@ -1040,6 +1041,10 @@ do_genkey(const struct options *options)
         }
 
         nbits_written = write_key_file(2, options->shared_secret_file);
+        if (nbits_written < 0)
+        {
+            msg(M_FATAL, "Failed to write key file");
+        }
 
         msg(D_GENKEY | M_NOPREFIX,
             "Randomly generated %d bit key written to %s", nbits_written,
@@ -1847,8 +1852,11 @@ static void
 do_close_tun_simple(struct context *c)
 {
     msg(D_CLOSE, "Closing TUN/TAP interface");
-    close_tun(c->c1.tuntap);
-    c->c1.tuntap = NULL;
+    if (c->c1.tuntap)
+    {
+        close_tun(c->c1.tuntap);
+        c->c1.tuntap = NULL;
+    }
     c->c1.tuntap_owned = false;
 #if P2MP
     CLEAR(c->c1.pulled_options_digest_save);
@@ -2406,7 +2414,6 @@ key_schedule_free(struct key_schedule *ks, bool free_ssl_ctx)
     if (tls_ctx_initialised(&ks->ssl_ctx) && free_ssl_ctx)
     {
         tls_ctx_free(&ks->ssl_ctx);
-        free_key_ctx_bi(&ks->tls_wrap_key);
     }
     CLEAR(*ks);
 }
@@ -2497,6 +2504,48 @@ do_init_crypto_static(struct context *c, const unsigned int flags)
 }
 
 /*
+ * Initialize the tls-auth/crypt key context
+ */
+static void
+do_init_tls_wrap_key(struct context *c)
+{
+    const struct options *options = &c->options;
+
+    /* TLS handshake authentication (--tls-auth) */
+    if (options->ce.tls_auth_file)
+    {
+        /* Initialize key_type for tls-auth with auth only */
+        CLEAR(c->c1.ks.tls_auth_key_type);
+        if (!streq(options->authname, "none"))
+        {
+            c->c1.ks.tls_auth_key_type.digest = md_kt_get(options->authname);
+                c->c1.ks.tls_auth_key_type.hmac_length =
+                    md_kt_size(c->c1.ks.tls_auth_key_type.digest);
+        }
+        else
+        {
+            msg(M_FATAL, "ERROR: tls-auth enabled, but no valid --auth "
+                "algorithm specified ('%s')", options->authname);
+        }
+
+        crypto_read_openvpn_key(&c->c1.ks.tls_auth_key_type,
+                                &c->c1.ks.tls_wrap_key,
+                                options->ce.tls_auth_file,
+                                options->ce.tls_auth_file_inline,
+                                options->ce.key_direction,
+                                "Control Channel Authentication", "tls-auth");
+    }
+
+    /* TLS handshake encryption+authentication (--tls-crypt) */
+    if (options->ce.tls_crypt_file)
+    {
+        tls_crypt_init_key(&c->c1.ks.tls_wrap_key,
+                           options->ce.tls_crypt_file,
+                           options->ce.tls_crypt_inline, options->tls_server);
+    }
+}
+
+/*
  * Initialize the persistent component of OpenVPN's TLS mode,
  * which is preserved across SIGUSR1 resets.
  */
@@ -2545,35 +2594,8 @@ do_init_crypto_tls_c1(struct context *c)
         /* Initialize PRNG with config-specified digest */
         prng_init(options->prng_hash, options->prng_nonce_secret_len);
 
-        /* TLS handshake authentication (--tls-auth) */
-        if (options->tls_auth_file)
-        {
-            /* Initialize key_type for tls-auth with auth only */
-            CLEAR(c->c1.ks.tls_auth_key_type);
-            if (!streq(options->authname, "none"))
-            {
-                c->c1.ks.tls_auth_key_type.digest = md_kt_get(options->authname);
-                c->c1.ks.tls_auth_key_type.hmac_length =
-                    md_kt_size(c->c1.ks.tls_auth_key_type.digest);
-            }
-            else
-            {
-                msg(M_FATAL, "ERROR: tls-auth enabled, but no valid --auth "
-                    "algorithm specified ('%s')", options->authname);
-            }
-
-            crypto_read_openvpn_key(&c->c1.ks.tls_auth_key_type,
-                                    &c->c1.ks.tls_wrap_key, options->tls_auth_file,
-                                    options->tls_auth_file_inline, options->key_direction,
-                                    "Control Channel Authentication", "tls-auth");
-        }
-
-        /* TLS handshake encryption+authentication (--tls-crypt) */
-        if (options->tls_crypt_file)
-        {
-            tls_crypt_init_key(&c->c1.ks.tls_wrap_key, options->tls_crypt_file,
-                               options->tls_crypt_inline, options->tls_server);
-        }
+        /* initialize tls-auth/crypt key */
+        do_init_tls_wrap_key(c);
 
         c->c1.ciphername = options->ciphername;
         c->c1.authname = options->authname;
@@ -2595,6 +2617,12 @@ do_init_crypto_tls_c1(struct context *c)
         c->options.ciphername = c->c1.ciphername;
         c->options.authname = c->c1.authname;
         c->options.keysize = c->c1.keysize;
+
+        /*
+         * tls-auth/crypt key can be configured per connection block, therefore
+         * we must reload it as it may have changed
+         */
+        do_init_tls_wrap_key(c);
     }
 }
 
@@ -2783,7 +2811,7 @@ do_init_crypto_tls(struct context *c, const unsigned int flags)
 #endif
 
     /* TLS handshake authentication (--tls-auth) */
-    if (options->tls_auth_file)
+    if (options->ce.tls_auth_file)
     {
         to.tls_wrap.mode = TLS_WRAP_AUTH;
         to.tls_wrap.opt.key_ctx_bi = c->c1.ks.tls_wrap_key;
@@ -2794,7 +2822,7 @@ do_init_crypto_tls(struct context *c, const unsigned int flags)
     }
 
     /* TLS handshake encryption (--tls-crypt) */
-    if (options->tls_crypt_file)
+    if (options->ce.tls_crypt_file)
     {
         to.tls_wrap.mode = TLS_WRAP_CRYPT;
         to.tls_wrap.opt.key_ctx_bi = c->c1.ks.tls_wrap_key;
@@ -3092,11 +3120,11 @@ do_option_warnings(struct context *c)
     /* If a script is used, print appropiate warnings */
     if (o->user_script_used)
     {
-        if (script_security >= SSEC_SCRIPTS)
+        if (script_security() >= SSEC_SCRIPTS)
         {
             msg(M_WARN, "NOTE: the current --script-security setting may allow this configuration to call user-defined scripts");
         }
-        else if (script_security >= SSEC_PW_ENV)
+        else if (script_security() >= SSEC_PW_ENV)
         {
             msg(M_WARN, "WARNING: the current --script-security setting may allow passwords to be passed to scripts via environmental variables");
         }
@@ -3384,6 +3412,12 @@ do_close_tls(struct context *c)
     }
     c->c2.options_string_local = c->c2.options_string_remote = NULL;
 #endif
+
+    if (c->c2.pulled_options_state)
+    {
+        md_ctx_cleanup(c->c2.pulled_options_state);
+        md_ctx_free(c->c2.pulled_options_state);
+    }
 }
 
 /*
@@ -3392,6 +3426,13 @@ do_close_tls(struct context *c)
 static void
 do_close_free_key_schedule(struct context *c, bool free_ssl_ctx)
 {
+    /*
+     * always free the tls_auth/crypt key. If persist_key is true, the key will
+     * be reloaded from memory (pre-cached)
+     */
+    free_key_ctx_bi(&c->c1.ks.tls_wrap_key);
+    CLEAR(c->c1.ks.tls_wrap_key);
+
     if (!(c->sig->signal_received == SIGUSR1 && c->options.persist_key))
     {
         key_schedule_free(&c->c1.ks, free_ssl_ctx);

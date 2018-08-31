@@ -5,8 +5,8 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *  Copyright (C) 2006-2010, Brainspark B.V.
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -60,7 +60,6 @@
 
 #include <mbedtls/oid.h>
 #include <mbedtls/pem.h>
-#include <mbedtls/sha256.h>
 
 static const mbedtls_x509_crt_profile openvpn_x509_crt_profile_legacy =
 {
@@ -206,9 +205,10 @@ key_state_export_keying_material(struct key_state_ssl *ssl,
 {
 }
 
-void
+bool
 tls_ctx_set_options(struct tls_root_ctx *ctx, unsigned int ssl_flags)
 {
+    return true;
 }
 
 static const char *
@@ -582,7 +582,7 @@ external_pkcs1_sign( void *ctx_voidptr,
     /* call MI for signature */
     if (management)
     {
-        out_b64 = management_query_rsa_sig(management, in_b64);
+        out_b64 = management_query_pk_sig(management, in_b64);
     }
     if (!out_b64)
     {
@@ -630,7 +630,7 @@ tls_ctx_use_external_private_key(struct tls_root_ctx *ctx,
 
     if (ctx->crt_chain == NULL)
     {
-        return 0;
+        return 1;
     }
 
     ALLOC_OBJ_CLEAR(ctx->external_key, struct external_context);
@@ -640,10 +640,10 @@ tls_ctx_use_external_private_key(struct tls_root_ctx *ctx,
     if (!mbed_ok(mbedtls_pk_setup_rsa_alt(ctx->priv_key, ctx->external_key,
                                           NULL, external_pkcs1_sign, external_key_len)))
     {
-        return 0;
+        return 1;
     }
 
-    return 1;
+    return 0;
 }
 #endif /* ifdef MANAGMENT_EXTERNAL_KEY */
 
@@ -850,9 +850,14 @@ tls_ctx_personalise_random(struct tls_root_ctx *ctx)
 
     if (NULL != ctx->crt_chain)
     {
+        const md_kt_t *sha256_kt = md_kt_get("SHA256");
         mbedtls_x509_crt *cert = ctx->crt_chain;
 
-        mbedtls_sha256(cert->tbs.p, cert->tbs.len, sha256_hash, false);
+        if (0 != md_full(sha256_kt, cert->tbs.p, cert->tbs.len, sha256_hash))
+        {
+            msg(M_WARN, "WARNING: failed to personalise random");
+        }
+
         if (0 != memcmp(old_sha256_hash, sha256_hash, sizeof(sha256_hash)))
         {
             mbedtls_ctr_drbg_update(cd_ctx, sha256_hash, 32);

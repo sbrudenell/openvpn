@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2010-2017 Fox Crypto B.V. <openvpn@fox-it.com>
+ *  Copyright (C) 2010-2018 Fox Crypto B.V. <openvpn@fox-it.com>
  *
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -134,7 +134,7 @@
  * without wasting resources on attempting a TLS handshake which will
  * ultimately fail.
  *
- * @subsection network_protocol_control_key_methods Control channel key methods and
+ * @subsection network_protocol_control_key_methods Control channel key methods
  *
  * Once the TLS session has been initialized and authenticated, the TLS
  * channel is used to exchange random %key material for bidirectional

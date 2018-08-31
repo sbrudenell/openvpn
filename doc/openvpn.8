@@ -4,7 +4,7 @@
 .\"             packet encryption, packet authentication, and
 .\"             packet compression.
 .\"
-.\"  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+.\"  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
 .\"
 .\"  This program is free software; you can redistribute it and/or modify
 .\"  it under the terms of the GNU General Public License version 2
@@ -33,7 +33,15 @@
 .\" .ft -- normal face
 .\" .in +|-{n} -- indent
 .\"
-.TH openvpn 8 "04 April 2017"
+.\" Support macros - this is not present on all platforms
+.\" Continuation line for .TP header.
+.de TQ
+.  br
+.  ns
+.  TP \\$1\" no doublequotes around argument!
+..
+.\" End of TQ macro
+.TH openvpn 8 "28 February 2018"
 .\"*********************************************************
 .SH NAME
 openvpn \- secure IP tunnel daemon.
@@ -353,6 +361,7 @@ block:
 .B fragment,
 .B http\-proxy,
 .B http\-proxy\-option,
+.B key\-direction,
 .B link\-mtu,
 .B local,
 .B lport,
@@ -364,6 +373,8 @@ block:
 .B remote,
 .B rport,
 .B socks\-proxy,
+.B tls\-auth,
+.B tls\-crypt,
 .B tun\-mtu and
 .B tun\-mtu\-extra.
 
@@ -1621,7 +1632,7 @@ and
 .B \-\-ping\-restart.
 
 This option can be used on both client and server side, but it is
-in enough to add this on the server side as it will push appropriate
+enough to add this on the server side as it will push appropriate
 .B \-\-ping
 and
 .B \-\-ping\-restart
@@ -2452,12 +2463,37 @@ seconds.
 Status can also be written to the syslog by sending a
 .B SIGUSR2
 signal.
+
+With multi\-client capability enabled on a server, the status file includes a
+list of clients and a routing table. The output format can be controlled by the
+.B \-\-status\-version
+option in that case.
+
+For clients or instances running in point\-to\-point mode, it will contain the
+traffic statistics.
 .\"*********************************************************
 .TP
 .B \-\-status\-version [n]
-Choose the status file format version number.  Currently
-.B n
-can be 1, 2, or 3 and defaults to 1.
+Set the status file format version number to
+.B n\fR.
+
+This only affects the status file on servers with multi\-client capability
+enabled.
+
+.B 1
+\-\- traditional format (default). The client list contains the following
+fields comma\-separated: Common Name, Real Address, Bytes Received, Bytes Sent,
+Connected Since.
+.br
+.B 2
+\-\- a more reliable format for external processing. Compared to version 1, the
+client list contains some additional fields: Virtual Address, Virtual IPv6
+Address, Username, Client ID, Peer ID, Data Channel Cipher.
+Future versions may extend the number of fields.
+.br
+.B 3
+\-\- identical to 2, but fields are tab\-separated.
+
 .\"*********************************************************
 .TP
 .B \-\-mute n
@@ -2483,6 +2519,16 @@ If the
 parameter is empty, compression will be turned off, but the packet
 framing for compression will still be enabled, allowing a different
 setting to be pushed later.
+
+.B Security Considerations
+
+Compression and encryption is a tricky combination.  If an attacker knows or is
+able to control (parts of) the plaintext of packets that contain secrets, the
+attacker might be able to extract the secret if compression is enabled.  See
+e.g. the CRIME and BREACH attacks on TLS which also leverage compression to
+break encryption.  If you are not entirely sure that the above does not apply
+to your traffic, you are advised to *not* enable compression.
+
 .\"*********************************************************
 .TP
 .B \-\-comp\-lzo [mode]
@@ -2547,54 +2593,52 @@ the compression efficiency will be very low, triggering openvpn to disable
 compression for a period of time until the next re\-sample test.
 .\"*********************************************************
 .TP
+.B \-\-management socket\-name unix [pw\-file] \ \ \ \ \ (recommended)
+.TQ
 .B \-\-management IP port [pw\-file]
-Enable a TCP server on
-.B IP:port
-to handle daemon management functions.
-.B pw\-file,
-if specified,
-is a password file (password on first line)
-or "stdin" to prompt from standard input.  The password
-provided will set the password which TCP clients will need
-to provide in order to access management functions.
+Enable a management server on a
+.B socket\-name
+Unix socket on those platforms supporting it, or on
+a designated TCP port.
 
-The management interface can also listen on a unix domain socket,
-for those platforms that support it.  To use a unix domain socket, specify
-the unix socket pathname in place of
-.B IP
-and set
-.B port
-to 'unix'.  While the default behavior is to create a unix domain socket
-that may be connected to by any process, the
+.B pw\-file
+, if specified, is a password file where the password must be on first line.
+Instead of a filename it can use the keyword stdin which will prompt the user
+for a password to use when OpenVPN is starting.
+
+For unix sockets, the  default  behaviour  is to create a unix domain socket
+that may be connected to by any process.  Use the
 .B \-\-management\-client\-user
 and
 .B \-\-management\-client\-group
-directives can be used to restrict access.
+directives to restrict access.
 
-The management interface provides a special mode where the TCP
-management link can operate over the tunnel itself.  To enable this mode,
-set
-.B IP
-= "tunnel".  Tunnel mode will cause the management interface
-to listen for a TCP connection on the local VPN address of the
-TUN/TAP interface.
+The management interface provides a special mode where the TCP management link
+can operate over the tunnel itself.  To enable this mode, set IP to
+.B tunnel.
+Tunnel mode will cause the  management interface to listen for a
+TCP connection on the local VPN address of the TUN/TAP interface.
 
-While the management port is designed for programmatic control
-of OpenVPN by other applications, it is possible to telnet
-to the port, using a telnet client in "raw" mode.  Once connected,
-type "help" for a list of commands.
+.B BEWARE
+of enabling the management interface over TCP.  In  these cases you should
+.I ALWAYS
+make use of
+.B pw\-file
+to password protect the management interface.  Any user who can connect to this
+TCP
+.B IP:port
+will be able to manage and control (and interfere with) the OpenVPN process.
+It is also strongly recommended to set IP to 127.0.0.1 (localhost) to restrict
+accessibility of the management server to local clients.
 
-For detailed documentation on the management interface, see
-the management\-notes.txt file in the
-.B management
-folder of
-the OpenVPN source distribution.
+While the management port is designed for  programmatic control of OpenVPN by
+other applications, it is possible to telnet to the port, using a telnet client
+in "raw" mode.  Once  connected, type "help" for a list of commands.
 
-It is strongly recommended that
-.B IP
-be set to 127.0.0.1
-(localhost) to restrict accessibility of the management
-server to local clients. 
+For detailed documentation on the management interface, see the
+.I management\-notes.txt
+file in the management folder of the OpenVPN source distribution.
+
 .TP
 .B \-\-management\-client
 Management interface will connect as a TCP/unix domain client to
@@ -3004,6 +3048,11 @@ an option,
 can be used to first remove the old value, and then add a new
 .B \-\-push
 option with the new value.
+
+NOTE2: due to implementation details, 'ifconfig' and 'ifconfig-ipv6'
+can only be removed with an exact match on the option ("push-remove ifconfig"),
+no substring matching and no matching on the IPv4/IPv6 address argument
+is possible.
 .\"*********************************************************
 .TP
 .B \-\-push\-peer\-info
@@ -3025,7 +3074,7 @@ IV_NCP=2 \-\- negotiable ciphers, client supports
 pushed by the server, a value of 2 or greater indicates client
 supports AES\-GCM\-128 and AES\-GCM\-256.
 
-IV_UI_VER=<gui_id> <version> \-\- the UI version of a UI if one is
+IV_GUI_VER=<gui_id> <version> \-\- the UI version of a UI if one is
 running, for example "de.blinkt.openvpn 0.5.47" for the
 Android app.
 
@@ -5852,17 +5901,13 @@ across the VPN.
 Set Connection\-specific DNS Suffix.
 
 .B DNS addr \-\-
-Set primary domain name server IPv4 address.  Repeat
+Set primary domain name server IPv4 or IPv6 address.  Repeat
 this option to set secondary DNS server addresses.
 
-.B DNS6 addr \-\-
-Set primary domain name server IPv6 address.  Repeat
-this option to set secondary DNS server IPv6 addresses.
-
-Note: currently this is handled using netsh (the
-existing DHCP code can only do IPv4 DHCP, and that protocol only
-permits IPv4 addresses anywhere).  The option will be put into the
-environment, so an
+Note: DNS IPv6 servers are currently set using netsh (the existing
+DHCP code can only do IPv4 DHCP, and that protocol only permits IPv4
+addresses anywhere).  The option will be put into the environment, so
+an
 .B \-\-up
 script could act upon it if needed.
 
@@ -7284,7 +7329,7 @@ For more information on the LZO real\-time compression library see
 .I http://www.oberhumer.com/opensource/lzo/
 .\"*********************************************************
 .SH COPYRIGHT
-Copyright (C) 2002\-2017 OpenVPN Technologies, Inc. This program is free software;
+Copyright (C) 2002\-2018 OpenVPN Inc This program is free software;
 you can redistribute it and/or modify
 it under the terms of the GNU General Public License version 2
 as published by the Free Software Foundation.

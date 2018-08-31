@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -469,11 +469,15 @@ const char *skip_leading_whitespace(const char *str);
 
 void string_null_terminate(char *str, int len, int capacity);
 
-/*
- * Write string in buf to file descriptor fd.
- * NOTE: requires that string be null terminated.
+/**
+ * Write buffer contents to file.
+ *
+ * @param filename  The filename to write the buffer to.
+ * @param buf       The buffer to write to the file.
+ *
+ * @return true on success, false otherwise.
  */
-void buf_write_string_file(const struct buffer *buf, const char *filename, int fd);
+bool buffer_write_file(const char *filename, const struct buffer *buf);
 
 /*
  * write a string to the end of a buffer that was
@@ -1095,9 +1099,9 @@ bool buffer_list_defined(const struct buffer_list *ol);
 
 void buffer_list_reset(struct buffer_list *ol);
 
-void buffer_list_push(struct buffer_list *ol, const unsigned char *str);
+void buffer_list_push(struct buffer_list *ol, const char *str);
 
-struct buffer_entry *buffer_list_push_data(struct buffer_list *ol, const uint8_t *data, size_t size);
+struct buffer_entry *buffer_list_push_data(struct buffer_list *ol, const void *data, size_t size);
 
 struct buffer *buffer_list_peek(struct buffer_list *ol);
 
@@ -1107,8 +1111,21 @@ void buffer_list_pop(struct buffer_list *ol);
 
 void buffer_list_aggregate(struct buffer_list *bl, const size_t max);
 
-void buffer_list_aggregate_separator(struct buffer_list *bl, const size_t max, const char *sep);
+void buffer_list_aggregate_separator(struct buffer_list *bl,
+                                     const size_t max_len, const char *sep);
 
 struct buffer_list *buffer_list_file(const char *fn, int max_line_len);
+
+/**
+ * buffer_read_from_file - copy the content of a file into a buffer
+ *
+ * @param file      path to the file to read
+ * @param gc        the garbage collector to use when allocating the buffer. It
+ *                  is passed to alloc_buf_gc() and therefore can be NULL.
+ *
+ * @return the buffer storing the file content or an invalid buffer in case of
+ * error
+ */
+struct buffer buffer_read_from_file(const char *filename, struct gc_arena *gc);
 
 #endif /* BUFFER_H */

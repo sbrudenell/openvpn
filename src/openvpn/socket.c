@@ -5,7 +5,7 @@
  *             packet encryption, packet authentication, and
  *             packet compression.
  *
- *  Copyright (C) 2002-2017 OpenVPN Technologies, Inc. <sales@openvpn.net>
+ *  Copyright (C) 2002-2018 OpenVPN Inc <sales@openvpn.net>
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 2
@@ -35,6 +35,7 @@
 #include "gremlin.h"
 #include "plugin.h"
 #include "ps.h"
+#include "run_command.h"
 #include "manage.h"
 #include "misc.h"
 #include "manage.h"
@@ -1122,7 +1123,7 @@ socket_do_accept(socket_descriptor_t sd,
 
     if (!socket_defined(new_sd))
     {
-        msg(D_LINK_ERRORS | M_ERRNO, "TCP: accept(%d) failed", sd);
+        msg(D_LINK_ERRORS | M_ERRNO, "TCP: accept(%d) failed", (int)sd);
     }
     /* only valid if we have remote_len_af!=0 */
     else if (remote_len_af && remote_len != remote_len_af)
@@ -1490,6 +1491,22 @@ socket_connect(socket_descriptor_t *sd,
 done:
     gc_free(&gc);
 }
+
+/*
+ * Stream buffer handling prototypes -- stream_buf is a helper class
+ * to assist in the packetization of stream transport protocols
+ * such as TCP.
+ */
+
+static void
+stream_buf_init(struct stream_buf *sb, struct buffer *buf,
+                const unsigned int sockflags, const int proto);
+
+static void
+stream_buf_close(struct stream_buf *sb);
+
+static bool
+stream_buf_added(struct stream_buf *sb, int length_added);
 
 /* For stream protocols, allocate a buffer to build up packet.
  * Called after frame has been finalized. */
@@ -1875,12 +1892,12 @@ phase2_inetd(struct link_socket *sock, const struct frame *frame,
                 sock->info.lsa->actual.dest.addr.sa.sa_family = local_addr.addr.sa.sa_family;
                 dmsg(D_SOCKET_DEBUG, "inetd(%s): using sa_family=%d from getsockname(%d)",
                      proto2ascii(sock->info.proto, sock->info.af, false),
-                     local_addr.addr.sa.sa_family, sock->sd);
+                     local_addr.addr.sa.sa_family, (int)sock->sd);
             }
             else
             {
                 msg(M_WARN, "inetd(%s): getsockname(%d) failed, using AF_INET",
-                    proto2ascii(sock->info.proto, sock->info.af, false), sock->sd);
+                    proto2ascii(sock->info.proto, sock->info.af, false), (int)sock->sd);
             }
         }
 #else  /* ifdef HAVE_GETSOCKNAME */
@@ -2500,7 +2517,7 @@ stream_buf_reset(struct stream_buf *sb)
     sb->len = -1;
 }
 
-void
+static void
 stream_buf_init(struct stream_buf *sb,
                 struct buffer *buf,
                 const unsigned int sockflags,
@@ -2574,7 +2591,7 @@ stream_buf_read_setup_dowork(struct link_socket *sock)
     return !sock->stream_buf.residual_fully_formed;
 }
 
-bool
+static bool
 stream_buf_added(struct stream_buf *sb,
                  int length_added)
 {
@@ -2641,7 +2658,7 @@ stream_buf_added(struct stream_buf *sb,
     }
 }
 
-void
+static void
 stream_buf_close(struct stream_buf *sb)
 {
     free_buf(&sb->residual);
